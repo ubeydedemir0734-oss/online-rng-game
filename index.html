@@ -173,10 +173,11 @@ button.link{background:none;border:none;color:#7af;text-decoration:underline;fon
   <label>No Cooldown</label><button id="noCdBtn">KAPALI</button>
   <label>No Stun</label><button id="noStunBtn">KAPALI</button>
   <label>Karakter</label><select id="ownChar"></select><button id="ownEquip">KUŞAN</button>
-  <label>Para</label><div style="display:flex;gap:6px"><input id="ownMoney" type="number" value="1000"><button id="ownMoneyBtn">EKLE</button></div>
-  <label>Ban</label><div style="display:flex;gap:6px"><input id="banUser"><button id="banBtn" class="danger">BAN</button></div>
-  <label>Admin</label><div style="display:flex;gap:6px"><input id="adminUser"><button id="adminBtn">VER</button></div>
-  <label>Gift</label><input id="giftUser"><select id="giftChar"></select><button id="giftBtn">GIFT</button>
+  <label>Para (kendine)</label><div style="display:flex;gap:6px"><input id="ownMoney" type="number" value="1000"><button id="ownMoneyBtn">EKLE</button></div>
+  <label>Para Gift</label><div style="display:flex;gap:6px"><input id="giftMoneyUser" placeholder="oyuncu"><input id="giftMoneyAmt" type="number" value="500" style="width:70px"><button id="giftMoneyBtn" class="gold">GÖNDER</button></div>
+  <label>Ban / Unban</label><div style="display:flex;gap:6px"><input id="banUser" placeholder="oyuncu"><button id="banBtn" class="danger">BAN</button><button id="unbanBtn" class="sec">UNBAN</button></div>
+  <label>Admin Ver / Al</label><div style="display:flex;gap:6px"><input id="adminUser" placeholder="oyuncu"><button id="adminBtn">VER</button><button id="adminRemBtn" class="danger">AL</button></div>
+  <label>Karakter Gift</label><div style="display:flex;gap:6px;flex-wrap:wrap"><input id="giftUser" placeholder="oyuncu"><select id="giftChar"></select><button id="giftBtn">GIFT</button></div>
   <hr style="border-color:#543;margin:8px 0">
   <label>Bot</label><select id="botChar"><option value="rng">Random</option></select>
   <label>Zorluk %</label><input id="botDiff" type="number" value="30" min="1" max="100">
@@ -524,16 +525,71 @@ $("godBtn").onclick=function(){god=!god;$("godBtn").textContent=god?"AÇIK":"KAP
 $("noCdBtn").onclick=function(){noCd=!noCd;$("noCdBtn").textContent=noCd?"AÇIK":"KAPALI";toast(noCd?"No CD ON":"No CD OFF")};
 $("noStunBtn").onclick=function(){noStun=!noStun;$("noStunBtn").textContent=noStun?"AÇIK":"KAPALI";toast(noStun?"No Stun ON":"No Stun OFF")};
 $("ownEquip").onclick=function(){var id=$("ownChar").value;if(acc.chars.indexOf(id)<0)acc.chars.push(id);acc.eq=id;saveAcc();if(me){applyChar(me,id);me.hp=me.maxHp;buildAbil();toast((CHARS[id]||{}).name||id)}};
-$("ownMoneyBtn").onclick=function(){acc.money+=(+$("ownMoney").value||0);saveAcc();sfxCoin()};
-$("banBtn").onclick=function(){var u=($("banUser").value||"").trim().toLowerCase();if(!u)return;var loc=localGet(u)||{};loc.ban=true;localSet(u,loc);if(db)db.ref("rbg/accounts/"+u).update({ban:true});toast(u+" ban")};
-$("adminBtn").onclick=function(){var u=($("adminUser").value||"").trim().toLowerCase();if(!u)return;var loc=localGet(u)||{pass:"",money:0,chars:["mario"],eq:"mario"};loc.admin=true;localSet(u,loc);if(db)db.ref("rbg/accounts/"+u).update({admin:true});toast(u+" admin")};
-$("giftBtn").onclick=function(){
-  var u=($("giftUser").value||"").trim().toLowerCase(),id=$("giftChar").value;if(!u)return;
-  var loc=localGet(u)||{pass:"",money:0,chars:["mario"],eq:"mario",cosmetics:[]};
-  if(!loc.chars)loc.chars=["mario"]; if(loc.chars.indexOf(id)<0)loc.chars.push(id); localSet(u,loc);
-  if(db)db.ref("rbg/accounts/"+u+"/chars").once("value").then(function(s){var a=s.val()||[];if(!Array.isArray(a))a=Object.values(a);if(a.indexOf(id)<0)a.push(id);db.ref("rbg/accounts/"+u).update({chars:a})});
-  toast("Gift OK");
+function ensureAccStub(u){
+  var loc=localGet(u);
+  if(!loc){loc={pass:"",money:0,chars:["mario"],eq:"mario",cosmetics:[],cos:{body:null,glove:null,hat:null,aura:null},admin:false,ban:false};localSet(u,loc)}
+  return loc;
+}
+function fbAccUpdate(u, patch, cb){
+  ensureAccStub(u);
+  var loc=localGet(u)||{};
+  Object.keys(patch).forEach(function(k){loc[k]=patch[k]});
+  localSet(u,loc);
+  if(!db){if(cb)cb(true);toast("Yerel kaydedildi");return}
+  db.ref("rbg/accounts/"+u).once("value").then(function(s){
+    var d=s.val()||{pass:loc.pass||"",money:0,chars:["mario"],eq:"mario",cosmetics:[],admin:false};
+    Object.keys(patch).forEach(function(k){d[k]=patch[k]});
+    return db.ref("rbg/accounts/"+u).update(d).then(function(){if(cb)cb(true)}).catch(function(e){toast("FB hata: "+(e.message||e));if(cb)cb(false)});
+  }).catch(function(e){
+    db.ref("rbg/accounts/"+u).set(Object.assign({pass:"",money:0,chars:["mario"],eq:"mario",cosmetics:[],admin:false},patch)).then(function(){if(cb)cb(true)}).catch(function(){if(cb)cb(false)});
+  });
+}
+$("ownMoneyBtn").onclick=function(){acc.money+=(+$("ownMoney").value||0);saveAcc();sfxCoin();toast("+"+(+$("ownMoney").value||0))};
+$("giftMoneyBtn").onclick=function(){
+  var u=($("giftMoneyUser").value||"").trim().toLowerCase();
+  var amt=Math.floor(+$("giftMoneyAmt").value||0);
+  if(!u){toast("Oyuncu adı yaz");return}
+  if(amt<=0){toast("Miktar hatalı");return}
+  ensureAccStub(u);
+  var loc=localGet(u);
+  var newMoney=(loc.money|0)+amt;
+  fbAccUpdate(u,{money:newMoney},function(ok){toast(ok?("Para gift: @"+u+" +"+amt):"Gift başarısız");sfxCoin()});
 };
+$("banBtn").onclick=function(){
+  var u=($("banUser").value||"").trim().toLowerCase();if(!u)return;
+  fbAccUpdate(u,{ban:true},function(ok){toast(ok?(u+" BAN"):"Ban başarısız")});
+};
+$("unbanBtn").onclick=function(){
+  var u=($("banUser").value||"").trim().toLowerCase();if(!u)return;
+  fbAccUpdate(u,{ban:false},function(ok){toast(ok?(u+" UNBAN"):"Unban başarısız")});
+};
+$("adminBtn").onclick=function(){
+  var u=($("adminUser").value||"").trim().toLowerCase();if(!u)return;
+  fbAccUpdate(u,{admin:true},function(ok){toast(ok?(u+" ADMIN VERİLDİ"):"Admin verilemedi")});
+};
+$("adminRemBtn").onclick=function(){
+  var u=($("adminUser").value||"").trim().toLowerCase();if(!u)return;
+  if(u===OWNER){toast("Owner alınamaz");return}
+  fbAccUpdate(u,{admin:false},function(ok){toast(ok?(u+" ADMIN ALINDI"):"Admin alınamadı")});
+};
+$("giftBtn").onclick=function(){
+  var u=($("giftUser").value||"").trim().toLowerCase(),id=$("giftChar").value;if(!u){toast("Oyuncu adı yaz");return}
+  if(!CHARS[id]){toast("Karakter yok");return}
+  ensureAccStub(u);
+  function doGift(chars){
+    if(!Array.isArray(chars))chars=["mario"];
+    if(chars.indexOf(id)<0)chars.push(id);
+    fbAccUpdate(u,{chars:chars},function(ok){toast(ok?("Gift: "+CHARS[id].name+" → @"+u):"Gift başarısız");sfxCoin()});
+  }
+  if(db){
+    db.ref("rbg/accounts/"+u+"/chars").once("value").then(function(s){
+      var a=s.val()||(localGet(u)&&localGet(u).chars)||["mario"];
+      if(!Array.isArray(a))a=Object.values(a||{});
+      doGift(a);
+    }).catch(function(){doGift((localGet(u)&&localGet(u).chars)||["mario"])});
+  }else doGift((localGet(u)&&localGet(u).chars)||["mario"]);
+};
+
 $("botSpawn").onclick=function(){spawnBot(+$("botDiff").value||30,$("botChar").value)};
 $("botClear").onclick=function(){bots=[]};
 
@@ -548,7 +604,13 @@ function enterArena(){
     db.ref("rbg/arena/"+acc.user).set({x:me.x,y:me.y,hp:me.hp,maxHp:me.maxHp,charId:me.charId,cos:acc.cos||{},alive:true,ts:Date.now()});
     db.ref("rbg/arena/"+acc.user).onDisconnect().remove();
     db.ref("rbg/arena").on("value",function(s){var a=s.val()||{};others={};Object.keys(a).forEach(function(k){if(k!==acc.user)others[k]=a[k]});$("onlineBadge").textContent=String(1+Object.keys(others).length)});
-    db.ref("rbg/chat").limitToLast(20).on("value",function(s){var v=s.val()||{},h="";Object.keys(v).forEach(function(k){var m=v[k];h+="<div><b style='color:#f6a'>"+esc(m.u)+":</b> "+esc(m.t)+"</div>"});$("chatLog").innerHTML=h;$("chatLog").scrollTop=9999});
+    db.ref("rbg/chat").limitToLast(30).on("value",function(s){
+      var v=s.val()||{};
+      var keys=Object.keys(v).sort(function(a,b){return(v[a].ts||0)-(v[b].ts||0)});
+      var h="";
+      keys.forEach(function(k){var m=v[k];if(!m)return;h+="<div><b style='color:#f6a'>"+esc(m.u)+":</b> "+esc(m.t)+"</div>"});
+      $("chatLog").innerHTML=h;$("chatLog").scrollTop=99999;
+    });
   }
   toast("ARENA");
 }
@@ -565,12 +627,21 @@ function spawnBot(diff,cs){
   bots.push({bot:true,id:"b"+Math.random().toString(36).slice(2,6),x:me.x+rand(-250,250),y:me.y+rand(-250,250),hp:c.hp*m,maxHp:c.hp*m,spd:c.spd*(.7+diff/200),dmg:c.dmg*m,color:c.color,name:c.name+" AI",charId:id,ang:0,cd:0,diff:diff,style:c.style});
 }
 function esc(s){return String(s||"").replace(/[<>&]/g,"")}
+function appendChat(u,t){
+  var log=$("chatLog");if(!log)return;
+  log.innerHTML+="<div><b style='color:#f6a'>"+esc(u)+":</b> "+esc(t)+"</div>";
+  log.scrollTop=99999;
+}
 $("chatIn").onkeydown=function(e){
   if(e.key!=="Enter")return;
+  e.preventDefault();e.stopPropagation();
   var t=($("chatIn").value||"").trim();if(!t||!acc)return;$("chatIn").value="";
-  if(db)db.ref("rbg/chat").push({u:acc.user,t:t.slice(0,80),ts:Date.now()});
-  else{$("chatLog").innerHTML+="<div><b style='color:#f6a'>"+esc(acc.user)+":</b> "+esc(t)+"</div>"}
+  appendChat(acc.user,t.slice(0,80));
+  if(db){
+    db.ref("rbg/chat").push({u:acc.user,t:t.slice(0,80),ts:Date.now()}).catch(function(){toast("Chat gönderilemedi")});
+  }
 };
+
 
 window.addEventListener("keydown",function(e){
   keys[e.code]=true;
@@ -758,17 +829,52 @@ function ulti(){
   if(me.style==="dashhit"){for(var i=0;i<3;i++){(function(i){setTimeout(function(){if(!me)return;me.x+=Math.cos(me.ang)*80;damageCircle(me.x,me.y,55,d*1.2,me.id);boom(me.x,me.y,col,6)},i*80)})(i)}toast(me.ultiName);return}
   damageCircle(me.x,me.y,150,d*2.5,me.id);boom(me.x,me.y,"#fc6",12);toast(me.ultiName||"ULTI");
 }
-function damageCircle(x,y,r,dmg,from){bots.forEach(function(b){if(Math.hypot(b.x-x,b.y-y)<r)hit(b,dmg,from)});Object.keys(others).forEach(function(k){var o=others[k];if(o&&o.alive!==false&&Math.hypot(o.x-x,o.y-y)<r&&db)db.ref("rbg/hits").push({to:k,from:acc.user,dmg:dmg,ts:Date.now()})})}
-function damageCone(x,y,ang,fov,range,dmg,from){bots.forEach(function(b){var dx=b.x-x,dy=b.y-y,d=Math.hypot(dx,dy);if(d>range)return;var a=Math.atan2(dy,dx),diff=Math.atan2(Math.sin(a-ang),Math.cos(a-ang));if(Math.abs(diff)<fov/2)hit(b,dmg,from)})}
+var hitThrottle={};
+function sendHitTo(to,dmg){
+  if(!db||!acc||!to||to===acc.user)return;
+  var key=to+"_"+Math.floor(dmg);
+  var now=Date.now();
+  if(hitThrottle[key]&&now-hitThrottle[key]<80)return;
+  hitThrottle[key]=now;
+  db.ref("rbg/hits").push({to:to,from:acc.user,dmg:Math.round(dmg),ts:now});
+}
+function damageCircle(x,y,r,dmg,from){
+  bots.forEach(function(b){if(Math.hypot(b.x-x,b.y-y)<r)hit(b,dmg,from)});
+  Object.keys(others).forEach(function(k){
+    var o=others[k];
+    if(o&&o.alive!==false&&Math.hypot((o.x||0)-x,(o.y||0)-y)<r){
+      sendHitTo(k,dmg);
+      boom(o.x,o.y,"#f55",3);
+    }
+  });
+}
+function damageCone(x,y,ang,fov,range,dmg,from){
+  bots.forEach(function(b){var dx=b.x-x,dy=b.y-y,d=Math.hypot(dx,dy);if(d>range)return;var a=Math.atan2(dy,dx),diff=Math.atan2(Math.sin(a-ang),Math.cos(a-ang));if(Math.abs(diff)<fov/2)hit(b,dmg,from)});
+  Object.keys(others).forEach(function(k){
+    var o=others[k];if(!o||o.alive===false)return;
+    var dx=(o.x||0)-x,dy=(o.y||0)-y,d=Math.hypot(dx,dy);if(d>range)return;
+    var a=Math.atan2(dy,dx),diff=Math.atan2(Math.sin(a-ang),Math.cos(a-ang));
+    if(Math.abs(diff)<fov/2){sendHitTo(k,dmg);boom(o.x,o.y,"#f55",3)}
+  });
+}
 function hit(e,dmg,from){if(god&&e===me)return;e.hp-=dmg;boom(e.x,e.y,"#f55",4);sfxHit();if(e.hp<=0){e.hp=0;if(e.bot){bots=bots.filter(function(b){return b!==e});if(from===acc.user){acc.money+=25;me.ulti=Math.min(100,(me.ulti||0)+30);saveAcc();sfxCoin();toast("+25")}}}}
 function killMe(){if(god){me.hp=me.maxHp;return}me.hp=0;deadUntil=performance.now()+3000;$("respawnMsg").style.display="block";$("respawnMsg").textContent="3 saniye içinde canlanıyorsun...";setTimeout(function(){if(!me)return;me.hp=me.maxHp;me.x=W/2+rand(-80,80);me.y=H/2+rand(-80,80);deadUntil=0;$("respawnMsg").style.display="none"},3000)}
 setInterval(function(){
   if(!db||state!=="game"||!me||!acc)return;
-  db.ref("rbg/hits").orderByChild("ts").startAt(Date.now()-2000).once("value").then(function(s){
+  db.ref("rbg/hits").orderByChild("ts").startAt(Date.now()-3000).once("value").then(function(s){
     var v=s.val();if(!v)return;
-    Object.keys(v).forEach(function(k){var h=v[k];if(h.to===acc.user&&!god&&!deadUntil){me.hp-=h.dmg||10;db.ref("rbg/hits/"+k).remove();if(me.hp<=0)killMe()}});
-  });
-},350);
+    Object.keys(v).forEach(function(k){
+      var h=v[k];
+      if(!h||h.to!==acc.user)return;
+      if(god||deadUntil){db.ref("rbg/hits/"+k).remove();return}
+      if(h.from===acc.user){db.ref("rbg/hits/"+k).remove();return}
+      me.hp-=(h.dmg||10);
+      sfxHit();boom(me.x,me.y,"#f55",4);
+      db.ref("rbg/hits/"+k).remove();
+      if(me.hp<=0)killMe();
+    });
+  }).catch(function(){});
+},200);
 function boom(x,y,c,n){for(var i=0;i<n;i++)particles.push({x:x,y:y,vx:rand(-3,3),vy:rand(-3,3),life:.35,color:c,s:2+Math.random()*3})}
 
 var last=performance.now();
@@ -783,7 +889,9 @@ function update(dt){
   me.frozen=false;
   bots.forEach(function(b){b.frozen=false});
   freezeZones.forEach(function(z){
-    if(Math.hypot(me.x-z.x,me.y-z.y)<z.r){ if(!noStun&&!god) me.frozen=true; }
+    // caster is never frozen by own ZA WARUDO
+    if(z.from===acc.user||z.from===(me&&me.id)){ /* skip self */ }
+    else if(Math.hypot(me.x-z.x,me.y-z.y)<z.r){ if(!noStun&&!god) me.frozen=true; }
     bots.forEach(function(b){ if(Math.hypot(b.x-z.x,b.y-z.y)<z.r) b.frozen=true; });
   });
   if(standFx){standFx.life-=dt;standFx.x=me.x-Math.cos(me.ang)*28;standFx.y=me.y-Math.sin(me.ang)*28;standFx.ang=me.ang;if(standFx.life<=0)standFx=null}
@@ -810,7 +918,13 @@ function update(dt){
   projectiles.forEach(function(p){
     p.x+=p.vx;p.y+=p.vy;p.life-=dt;if(p.kind==="trap"){p.vx=0;p.vy=0}
     bots.forEach(function(b){if(p.from!==b.id&&Math.hypot(p.x-b.x,p.y-b.y)<(p.r+14)){hit(b,p.dmg,p.from);if(p.kind!=="trap")p.life=0}});
-    if(p.from!==acc.user&&Math.hypot(p.x-me.x,p.y-me.y)<(p.r+14)&&me.inv<=0&&!god&&!deadUntil){me.hp-=p.dmg;if(p.kind!=="trap")p.life=0;if(me.hp<=0)killMe()}
+    if(p.from===acc.user){
+      Object.keys(others).forEach(function(k){
+        var o=others[k];if(!o||o.alive===false)return;
+        if(Math.hypot(p.x-(o.x||0),p.y-(o.y||0))<(p.r+14)){sendHitTo(k,p.dmg);boom(o.x,o.y,"#f55",2);if(p.kind!=="trap")p.life=0}
+      });
+    }
+    if(p.from!==acc.user&&Math.hypot(p.x-me.x,p.y-me.y)<(p.r+14)&&me.inv<=0&&!god&&!deadUntil&&!(me.frozen&&!noStun)){me.hp-=p.dmg;sfxHit();boom(me.x,me.y,"#f55",3);if(p.kind!=="trap")p.life=0;if(me.hp<=0)killMe()}
   });
   projectiles=projectiles.filter(function(p){return p.life>0});
   particles.forEach(function(p){p.x+=p.vx;p.y+=p.vy;p.life-=dt});particles=particles.filter(function(p){return p.life>0});
